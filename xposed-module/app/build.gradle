@@ -1,0 +1,25 @@
+plugins {
+    id 'com.android.library'
+}
+
+android {
+    compileSdk 33
+    namespace 'com.bypass.dana'
+    defaultConfig {
+        minSdk 21
+        targetSdk 33
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+repositories {
+    maven { url 'https://api.xposed.info/' }
+    mavenCentral()
+}
+
+dependencies {
+    compileOnly 'de.robv.android.xposed:api:82'
+}
