@@ -6,85 +6,26 @@ import de.robv.android.xposed.XC_MethodReplacement;
 import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
+import android.os.Bundle;
 
 public class MainHook implements IXposedHookLoadPackage {
 
     @Override
-    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) throws Throwable {
+    public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (!lpparam.packageName.equals("id.dana")) return;
-        XposedBridge.log("[DanaBypass] Loaded!");
+        XposedBridge.log("[DanaBypass] Hooked id.dana!");
 
-        // 1. SecuritySignalsInfo
-        try {
-            Class<?> ssi = XposedHelpers.findClass(
-                "id.dana.telemetrysdk.model.SecuritySignalsInfo", lpparam.classLoader);
-            XposedHelpers.findAndHookMethod(ssi, "getRootDetected", XC_MethodReplacement.returnConstant(false));
-            XposedHelpers.findAndHookMethod(ssi, "getHookDetected", XC_MethodReplacement.returnConstant(false));
-            XposedHelpers.findAndHookMethod(ssi, "getEmulatorDetected", XC_MethodReplacement.returnConstant(false));
-            XposedHelpers.findAndHookMethod(ssi, "getTamperDetected", XC_MethodReplacement.returnConstant(false));
-            XposedBridge.log("[DanaBypass] SSI hooked");
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] SSI: " + e); }
+        // Root detection bypass
+        hook("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getRootDetected", lpparam);
+        hook("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getHookDetected", lpparam);
+        hook("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getEmulatorDetected", lpparam);
+        hook("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getTamperDetected", lpparam);
+        hook("id.dana.lib.gcontainer.app.bridge.deviceinfo.DeviceInfo$Device", "isRooted", lpparam);
+        hook("id.dana.utils.config.model.Device", "isRooted", lpparam);
+        hook("id.dana.domain.featureconfig.model.StartupConfig", "getFeatureDexguardTamperCheck", lpparam);
+        hook("com.alibaba.ariver.commonability.core.util.AOMPDeviceUtils", "isRooted", lpparam);
 
-        // 2. DeviceInfo
-        try {
-            XposedHelpers.findAndHookMethod(
-                "id.dana.lib.gcontainer.app.bridge.deviceinfo.DeviceInfo$Device",
-                lpparam.classLoader, "isRooted", XC_MethodReplacement.returnConstant(false));
-            XposedHelpers.findAndHookMethod(
-                "id.dana.lib.gcontainer.app.bridge.deviceinfo.DeviceInfo$Device",
-                lpparam.classLoader, "getIsRooted", XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 3. Device model
-        try {
-            XposedHelpers.findAndHookMethod(
-                "id.dana.utils.config.model.Device",
-                lpparam.classLoader, "isRooted", XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 4. StartupConfig DexGuard
-        try {
-            XposedHelpers.findAndHookMethod(
-                "id.dana.domain.featureconfig.model.StartupConfig",
-                lpparam.classLoader, "getFeatureDexguardTamperCheck",
-                XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 5. AOMPDeviceUtils
-        try {
-            XposedHelpers.findAndHookMethod(
-                "com.alibaba.ariver.commonability.core.util.AOMPDeviceUtils",
-                lpparam.classLoader, "isRooted", XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 6. Blueberry (Tencent SDK)
-        try {
-            XposedHelpers.findAndHookMethod(
-                "com.tencent.turingfd.sdk.antibot_oversea.Blueberry",
-                lpparam.classLoader, "a",
-                android.content.Context.class,
-                XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 7. Firebase CommonUtils
-        try {
-            XposedHelpers.findAndHookMethod(
-                "com.google.firebase.crashlytics.internal.common.CommonUtils",
-                lpparam.classLoader, "isRooted",
-                android.content.Context.class,
-                XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 8. DeviceUtil
-        try {
-            XposedHelpers.findAndHookMethod(
-                "id.dana.lib.gcontainer.util.DeviceUtil",
-                lpparam.classLoader, "isRooted",
-                android.content.Context.class,
-                XC_MethodReplacement.returnConstant(false));
-        } catch (Throwable e) {}
-
-        // 9. JSONObject.put - intercept rootDetected (CRITICAL!)
+        // JSONObject intercept
         try {
             XposedHelpers.findAndHookMethod(
                 "org.json.JSONObject", lpparam.classLoader,
@@ -96,94 +37,71 @@ public class MainHook implements IXposedHookLoadPackage {
                         if ("rootDetected".equals(key) || "hookDetected".equals(key)
                                 || "tamperDetected".equals(key) || "emulatorDetected".equals(key)) {
                             param.args[1] = false;
-                            XposedBridge.log("[DanaBypass] JSON " + key + " -> false");
+                            XposedBridge.log("[DanaBypass] " + key + " -> false");
                         }
                     }
                 });
             XposedBridge.log("[DanaBypass] JSONObject hooked");
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] JSON: " + e); }
+        } catch (Throwable e) {
+            XposedBridge.log("[DanaBypass] JSONObject: " + e.getMessage());
+        }
 
-        // 10. bglb.b - PALING KRITIS! Kirim rootDetected ke server
-        // Hook dengan lazy loading karena class load belakangan
-        hookBglbLazy(lpparam.classLoader);
+        // RiskChallengeActivity.init - block OOM/anti-tamper
+        try {
+            XposedHelpers.findAndHookMethod(
+                "id.dana.riskChallenges.ui.RiskChallengeActivity",
+                lpparam.classLoader, "init",
+                new XC_MethodReplacement() {
+                    @Override
+                    protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] RiskChallengeActivity.init BLOCKED!");
+                        return null;
+                    }
+                });
+            XposedBridge.log("[DanaBypass] RiskChallengeActivity.init blocked!");
+        } catch (Throwable e) {
+            XposedBridge.log("[DanaBypass] RC.init: " + e.getMessage());
+        }
 
-        // 11. System.exit block
+        // Block System.exit
         try {
             XposedHelpers.findAndHookMethod("java.lang.System", lpparam.classLoader,
                 "exit", int.class, new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        XposedBridge.log("[DanaBypass] System.exit blocked!");
+                        XposedBridge.log("[DanaBypass] exit blocked!");
                         param.setResult(null);
                     }
                 });
         } catch (Throwable e) {}
 
-        XposedBridge.log("[DanaBypass] All hooks applied!");
-    }
-
-    private void hookBglbLazy(final ClassLoader classLoader) {
-        // Hook ClassLoader untuk detect saat bglb di-load
+        // OOM block
         try {
-            XposedHelpers.findAndHookMethod(
-                ClassLoader.class, "loadClass", String.class,
+            XposedHelpers.findAndHookMethod("dalvik.system.VMRuntime",
+                lpparam.classLoader, "newNonMovableArray",
+                Class.class, int.class,
                 new XC_MethodHook() {
-                    private boolean bglbHooked = false;
                     @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        if (bglbHooked) return;
-                        String name = (String) param.args[0];
-                        if ("defpackage.bglb".equals(name)) {
-                            bglbHooked = true;
-                            try {
-                                Class<?> bglb = (Class<?>) param.getResult();
-                                if (bglb != null) hookBglb(bglb, classLoader);
-                            } catch (Throwable e) {
-                                XposedBridge.log("[DanaBypass] bglb hook error: " + e);
-                            }
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        int size = (int) param.args[1];
+                        if (size > 100000000) {
+                            param.args[1] = 1;
+                            XposedBridge.log("[DanaBypass] OOM blocked!");
                         }
                     }
                 });
-        } catch (Throwable e) {
-            // Fallback: langsung hook jika class sudah ada
-            try {
-                Class<?> bglb = XposedHelpers.findClass("defpackage.bglb", classLoader);
-                hookBglb(bglb, classLoader);
-            } catch (Throwable e2) {
-                XposedBridge.log("[DanaBypass] bglb not found yet: " + e2);
-            }
-        }
+        } catch (Throwable e) {}
+
+        XposedBridge.log("[DanaBypass] All done!");
     }
 
-    private void hookBglb(Class<?> bglb, ClassLoader classLoader) {
+    private void hook(String className, String method, XC_LoadPackage.LoadPackageParam lpparam) {
         try {
-            // Cari method b yang terima InitRequest
-            java.lang.reflect.Method[] methods = bglb.getDeclaredMethods();
-            for (java.lang.reflect.Method m : methods) {
-                if (m.getName().equals("b") && m.getParameterTypes().length == 1) {
-                    XposedBridge.hookMethod(m, new XC_MethodHook() {
-                        @Override
-                        protected void afterHookedMethod(MethodHookParam param) {
-                            try {
-                                org.json.JSONObject json = (org.json.JSONObject) param.getResult();
-                                if (json != null) {
-                                    json.put("rootDetected", false);
-                                    json.put("hookDetected", false);
-                                    json.put("emulatorDetected", false);
-                                    json.put("tamperDetected", false);
-                                    XposedBridge.log("[DanaBypass] bglb.b -> root=false!");
-                                }
-                            } catch (Throwable e) {
-                                XposedBridge.log("[DanaBypass] bglb post: " + e);
-                            }
-                        }
-                    });
-                    XposedBridge.log("[DanaBypass] bglb.b HOOKED!");
-                    break;
-                }
-            }
+            XposedHelpers.findAndHookMethod(className, lpparam.classLoader,
+                method, XC_MethodReplacement.returnConstant(false));
+            XposedBridge.log("[DanaBypass] " + method + " OK");
         } catch (Throwable e) {
-            XposedBridge.log("[DanaBypass] bglb hook: " + e);
+            XposedBridge.log("[DanaBypass] " + method + " skip: " + e.getMessage());
         }
     }
 }
