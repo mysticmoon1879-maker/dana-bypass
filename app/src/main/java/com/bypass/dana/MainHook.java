@@ -7,6 +7,8 @@ import de.robv.android.xposed.XposedBridge;
 import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import java.lang.reflect.Method;
+import java.util.HashSet;
+import java.util.Set;
 
 public class MainHook implements IXposedHookLoadPackage {
 
@@ -14,12 +16,26 @@ public class MainHook implements IXposedHookLoadPackage {
         "rootDetected","hookDetected","tamperDetected","emulatorDetected","isRooted","jailbroken"
     };
 
+    private static final Set<String> hooked = new HashSet<>();
+
+    private static void onClassLoaded(String name, Class<?> cls) {
+        if (cls == null || hooked.contains(name)) return;
+        switch (name) {
+            case "defpackage.bglq": hookBglqDirect(cls); hooked.add(name); break;
+            case "defpackage.bglz": hookBglzDirect(cls); hooked.add(name); break;
+            case "defpackage.bgls": hookBglsDirect(cls); hooked.add(name); break;
+            case "defpackage.bglb": hookBglbDirect(cls); hooked.add(name); break;
+            case "com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack":
+                hookScanAttackDirect(cls); hooked.add(name); break;
+        }
+    }
+
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (!lpparam.packageName.equals("id.dana")) return;
         XposedBridge.log("[DanaBypass] START");
 
-        // Standard hooks yang load di awal
+        // Standard hooks
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getRootDetected", lpparam);
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getHookDetected", lpparam);
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getEmulatorDetected", lpparam);
@@ -44,6 +60,12 @@ public class MainHook implements IXposedHookLoadPackage {
                     param.setResult(null);
                 }
             });
+        } catch (Throwable e) {}
+
+        // ScanAttack sudah load di startup
+        try {
+            Class<?> sa = lpparam.classLoader.loadClass("com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack");
+            hookScanAttackDirect(sa);
         } catch (Throwable e) {}
 
         // RC OOM suppress
@@ -78,90 +100,77 @@ public class MainHook implements IXposedHookLoadPackage {
         // Block exit
         try { XposedHelpers.findAndHookMethod("java.lang.System", lpparam.classLoader, "exit", int.class, new XC_MethodHook() { @Override protected void beforeHookedMethod(MethodHookParam p) { XposedBridge.log("[DanaBypass] exit blocked"); p.setResult(null); } }); } catch (Throwable e) {}
 
-        // KRITIS: ClassLoader watcher - gunakan result class LANGSUNG
-        try {
-            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, new XC_MethodHook() {
-                @Override protected void afterHookedMethod(MethodHookParam param) {
+        // Hook KEDUA overload loadClass + findClass
+        XC_MethodHook watcherHook = new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam param) {
+                try {
                     String name = (String) param.args[0];
                     Object result = param.getResult();
-                    if (result == null || !(result instanceof Class)) return;
-                    Class<?> cls = (Class<?>) result;
-
-                    switch (name) {
-                        case "defpackage.bglq":
-                            hookBglqDirect(cls); break;
-                        case "defpackage.bglz":
-                            hookBglzDirect(cls); break;
-                        case "defpackage.bgls":
-                            hookBglsDirect(cls); break;
-                        case "defpackage.bglb":
-                            hookBglbDirect(cls); break;
-                        case "com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack":
-                            hookScanAttackDirect(cls); break;
+                    if (result instanceof Class) {
+                        onClassLoaded(name, (Class<?>) result);
                     }
-                }
-            });
-            XposedBridge.log("[DanaBypass] ClassLoader watcher OK");
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] watcher error: " + e.getMessage()); }
+                } catch (Throwable e) {}
+            }
+        };
+
+        try {
+            // loadClass(String)
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, watcherHook);
+            // loadClass(String, boolean) - protected, internal Android call
+            XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class, watcherHook);
+            XposedBridge.log("[DanaBypass] loadClass watchers OK");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] watcher err: " + e.getMessage()); }
+
+        // Hook BaseDexClassLoader.findClass sebagai backup
+        try {
+            XposedHelpers.findAndHookMethod("dalvik.system.BaseDexClassLoader", lpparam.classLoader,
+                "findClass", String.class, watcherHook);
+            XposedBridge.log("[DanaBypass] BaseDexClassLoader.findClass OK");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] findClass: " + e.getMessage()); }
 
         XposedBridge.log("[DanaBypass] ALL DONE!");
     }
 
-    // Hook bglq langsung dari class object
     private static void hookBglqDirect(Class<?> cls) {
-        int count = 0;
-        for (Method m : cls.getDeclaredMethods()) {
-            if (m.getReturnType() == boolean.class && m.getParameterTypes().length == 0) {
-                try { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(false)); count++; } catch (Throwable e) {}
-            }
-        }
-        XposedBridge.log("[DanaBypass] bglq hooked: " + count);
+        int n = 0;
+        for (Method m : cls.getDeclaredMethods())
+            if (m.getReturnType() == boolean.class && m.getParameterTypes().length == 0)
+                try { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(false)); n++; } catch (Throwable e) {}
+        XposedBridge.log("[DanaBypass] bglq hooked: " + n);
     }
 
-    // Hook bglz langsung
     private static void hookBglzDirect(Class<?> cls) {
-        int setters = 0, getters = 0;
+        int s = 0, g = 0;
         for (Method m : cls.getDeclaredMethods()) {
             if (m.getReturnType() == void.class && m.getParameterTypes().length == 0) {
-                // Setter - block agar tidak set flag jadi true
-                try {
-                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
-                        @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                            XposedBridge.log("[DanaBypass] bglz." + p.method.getName() + " BLOCKED");
-                            return null;
-                        }
-                    });
-                    setters++;
-                } catch (Throwable e) {}
+                try { XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam p) {
+                        XposedBridge.log("[DanaBypass] bglz."+p.method.getName()+" BLOCKED"); return null;
+                    }
+                }); s++; } catch (Throwable e) {}
             } else if (m.getReturnType() == Boolean.class && m.getParameterTypes().length == 0) {
-                // Getter - return false
-                try { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(Boolean.FALSE)); getters++; } catch (Throwable e) {}
+                try { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(Boolean.FALSE)); g++; } catch (Throwable e) {}
             }
         }
-        XposedBridge.log("[DanaBypass] bglz setters=" + setters + " getters=" + getters);
+        XposedBridge.log("[DanaBypass] bglz setters=" + s + " getters=" + g);
     }
 
-    // Hook bgls.b() entry point
     private static void hookBglsDirect(Class<?> cls) {
         for (Method m : cls.getDeclaredMethods()) {
             if (m.getName().equals("b") && m.getParameterTypes().length >= 5) {
                 try {
                     XposedBridge.hookMethod(m, new XC_MethodHook() {
-                        @Override protected void beforeHookedMethod(MethodHookParam param) {
-                            for (int i = 0; i < param.args.length; i++) {
-                                if (param.args[i] instanceof Boolean) param.args[i] = Boolean.FALSE;
-                            }
-                            XposedBridge.log("[DanaBypass] bgls.b -> all false!");
+                        @Override protected void beforeHookedMethod(MethodHookParam p) {
+                            for (int i = 0; i < p.args.length; i++) if (p.args[i] instanceof Boolean) p.args[i] = Boolean.FALSE;
+                            XposedBridge.log("[DanaBypass] bgls.b -> false!");
                         }
                     });
                     XposedBridge.log("[DanaBypass] bgls.b HOOKED!");
-                } catch (Throwable e) {}
-                break;
+                } catch (Throwable e) {} break;
             }
         }
     }
 
-    // Hook bglb.b(InitRequest) - post-login JSON
     private static void hookBglbDirect(Class<?> cls) {
         for (Method m : cls.getDeclaredMethods()) {
             if (m.getName().equals("b") && m.getParameterTypes().length == 1) {
@@ -172,49 +181,41 @@ public class MainHook implements IXposedHookLoadPackage {
                                 Object r = param.getResult();
                                 if (r instanceof org.json.JSONObject) {
                                     org.json.JSONObject j = (org.json.JSONObject) r;
-                                    String[] keys = {"rootDetected","hookDetected","tamperDetected","emulatorDetected","isRooted"};
-                                    for (String k : keys) { try { j.put(k, false); } catch (Throwable e) {} }
+                                    for (String k : ROOT_KEYS) try { j.put(k, false); } catch (Throwable e) {}
                                     XposedBridge.log("[DanaBypass] bglb.b -> all false!");
                                 }
                             } catch (Throwable e) {}
                         }
                     });
                     XposedBridge.log("[DanaBypass] bglb.b HOOKED!");
-                } catch (Throwable e) {}
-                break;
+                } catch (Throwable e) {} break;
             }
         }
     }
 
-    // Hook ScanAttack methods
     private static void hookScanAttackDirect(Class<?> cls) {
-        int count = 0;
+        if (hooked.contains("com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack")) return;
+        int n = 0;
         for (Method m : cls.getDeclaredMethods()) {
             Class<?> ret = m.getReturnType();
             try {
-                if (ret == boolean.class) {
-                    XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(false)); count++;
-                } else if (ret == String.class) {
-                    if ("vir1".equals(m.getName())) {
-                        XposedBridge.hookMethod(m, new XC_MethodReplacement() {
-                            @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                                try { return ((android.content.Context) p.args[0]).getFilesDir().getAbsolutePath(); }
-                                catch (Throwable e) { return "/data/data/id.dana/files"; }
-                            }
-                        });
-                    } else {
-                        XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(null));
-                    }
-                    count++;
-                } else if ("methodToNative".equals(m.getName())) {
-                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
-                        @Override protected Object replaceHookedMethod(MethodHookParam p) { return new org.json.JSONArray(); }
+                if (ret == boolean.class) { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(false)); n++; }
+                else if (ret == String.class) {
+                    if ("vir1".equals(m.getName())) XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                        @Override protected Object replaceHookedMethod(MethodHookParam p) {
+                            try { return ((android.content.Context)p.args[0]).getFilesDir().getAbsolutePath(); } catch (Throwable e) { return "/data/data/id.dana/files"; }
+                        }
                     });
-                    count++;
+                    else XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(null));
+                    n++;
+                } else if ("methodToNative".equals(m.getName())) {
+                    XposedBridge.hookMethod(m, new XC_MethodReplacement() { @Override protected Object replaceHookedMethod(MethodHookParam p) { return new org.json.JSONArray(); } });
+                    n++;
                 }
             } catch (Throwable e) {}
         }
-        XposedBridge.log("[DanaBypass] ScanAttack HOOKED: " + count);
+        hooked.add("com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack");
+        XposedBridge.log("[DanaBypass] ScanAttack HOOKED: " + n);
     }
 
     private void hookFalse(String cls, String method, XC_LoadPackage.LoadPackageParam l) {
