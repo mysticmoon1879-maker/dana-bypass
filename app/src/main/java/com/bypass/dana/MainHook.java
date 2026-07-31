@@ -25,9 +25,8 @@ public class MainHook implements IXposedHookLoadPackage {
         hookFalse("com.alibaba.ariver.commonability.core.util.AOMPDeviceUtils", "isRooted", lpparam);
         hookFalse("com.google.firebase.crashlytics.internal.common.CommonUtils", "isRooted", lpparam);
 
-        // SSL PINNING - hanya bypass check, jangan block connection setup!
+        // SSL PINNING
         hookVoid("com.alipay.imobile.network.sslpinning.SSLPinningManager", "validateCertificates", lpparam);
-
         try {
             XposedHelpers.findAndHookMethod(
                 "android.security.net.config.NetworkSecurityTrustManager",
@@ -36,7 +35,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
-
         try {
             XposedHelpers.findAndHookMethod(
                 "android.security.net.config.RootTrustManager",
@@ -46,7 +44,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
-
         try {
             XposedHelpers.findAndHookMethod(
                 "com.android.okhttp.CertificatePinner",
@@ -57,7 +54,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 });
         } catch (Throwable e) {}
 
-        // FIX: UrlTransport - panggil original tapi ignore SSL exception
+        // UrlTransport - call original, ignore SSL errors only
         try {
             Class<?> reqClass = XposedHelpers.findClass(
                 "com.alipay.imobile.network.quake.Request", lpparam.classLoader);
@@ -69,15 +66,11 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                         try {
-                            // Panggil original
-                            XposedBridge.invokeOriginalMethod(
-                                param.method, param.thisObject, param.args);
+                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
                         } catch (Throwable e) {
-                            // Ignore SSL/cert errors saja
-                            String msg = e.getMessage();
-                            if (msg != null && (msg.contains("pinning") ||
-                                msg.contains("certificate") || msg.contains("SSL"))) {
-                                XposedBridge.log("[DanaBypass] SSL cert ignored");
+                            String msg = e.getMessage() != null ? e.getMessage() : "";
+                            if (msg.contains("pinning") || msg.contains("certificate") || msg.contains("SSL")) {
+                                XposedBridge.log("[DanaBypass] SSL ignored");
                             } else {
                                 throw e;
                             }
@@ -85,28 +78,48 @@ public class MainHook implements IXposedHookLoadPackage {
                         param.setResult(null);
                     }
                 });
-            XposedBridge.log("[DanaBypass] UrlTransport fixed!");
-        } catch (Throwable e) {
-            XposedBridge.log("[DanaBypass] UrlTransport: " + e.getMessage());
-        }
+            XposedBridge.log("[DanaBypass] UrlTransport OK");
+        } catch (Throwable e) {}
 
-        // RISK CHALLENGE
+        // RISK CHALLENGE - biarkan RC.init JALAN (agar Akamai challenge selesai)
+        // Hanya tangkap crash jika terjadi
         try {
             XposedHelpers.findAndHookMethod(
                 "id.dana.riskChallenges.ui.RiskChallengeActivity",
                 lpparam.classLoader, "init",
-                new XC_MethodReplacement() {
-                    @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                        XposedBridge.log("[DanaBypass] RC.init BLOCKED!");
-                        return null;
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        // Biarkan jalan normal - jangan di-block!
+                        XposedBridge.log("[DanaBypass] RC.init running normally...");
+                    }
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
+                        XposedBridge.log("[DanaBypass] RC.init completed!");
                     }
                 });
-            XposedBridge.log("[DanaBypass] RiskChallenge blocked!");
+            XposedBridge.log("[DanaBypass] RiskChallenge monitored (not blocked)");
         } catch (Throwable e) {
             XposedBridge.log("[DanaBypass] RC: " + e.getMessage());
         }
 
-        // JSON rootDetected
+        // OOM block - hanya untuk alokasi tidak wajar
+        try {
+            XposedHelpers.findAndHookMethod("dalvik.system.VMRuntime",
+                lpparam.classLoader, "newNonMovableArray",
+                Class.class, int.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if ((int) param.args[1] > 100000000) {
+                            XposedBridge.log("[DanaBypass] OOM blocked!");
+                            param.args[1] = 1;
+                        }
+                    }
+                });
+        } catch (Throwable e) {}
+
+        // JSON rootDetected intercept
         try {
             XposedHelpers.findAndHookMethod(
                 "org.json.JSONObject", lpparam.classLoader,
@@ -118,23 +131,11 @@ public class MainHook implements IXposedHookLoadPackage {
                         if ("rootDetected".equals(key) || "hookDetected".equals(key)
                                 || "tamperDetected".equals(key) || "emulatorDetected".equals(key)) {
                             param.args[1] = false;
+                            XposedBridge.log("[DanaBypass] " + key + " -> false");
                         }
                     }
                 });
             XposedBridge.log("[DanaBypass] JSONObject hooked");
-        } catch (Throwable e) {}
-
-        // OOM block
-        try {
-            XposedHelpers.findAndHookMethod("dalvik.system.VMRuntime",
-                lpparam.classLoader, "newNonMovableArray",
-                Class.class, int.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if ((int) param.args[1] > 100000000) param.args[1] = 1;
-                    }
-                });
         } catch (Throwable e) {}
 
         // Block exit
