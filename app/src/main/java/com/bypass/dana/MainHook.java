@@ -24,34 +24,65 @@ public class MainHook implements IXposedHookLoadPackage {
 
         // =========================================
         // KUNCI UTAMA: Block UnsafeDeviceActivity!
-        // Ini screen "root detected" yang muncul
-        // Ada di classes3.dex - hookable langsung!
+        // Hook startActivity untuk cegah launch sama sekali
         // =========================================
+
+        // 1. Hook Activity.startActivity(Intent)
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.app.Activity", lpparam.classLoader,
+                "startActivity", android.content.Intent.class,
+                new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam param) {
+                        android.content.Intent intent = (android.content.Intent) param.args[0];
+                        if (intent != null) {
+                            android.content.ComponentName cn = intent.getComponent();
+                            if (cn != null && cn.getClassName().contains("UnsafeDevice")) {
+                                XposedBridge.log("[DanaBypass] startActivity UnsafeDevice BLOCKED!");
+                                param.setResult(null);
+                            }
+                        }
+                    }
+                });
+            XposedBridge.log("[DanaBypass] startActivity watcher OK ✅");
+        } catch (Throwable e) {}
+
+        // 2. Hook Context.startActivity juga
+        try {
+            XposedHelpers.findAndHookMethod(
+                "android.content.ContextWrapper", lpparam.classLoader,
+                "startActivity", android.content.Intent.class,
+                new XC_MethodHook() {
+                    @Override protected void beforeHookedMethod(MethodHookParam param) {
+                        android.content.Intent intent = (android.content.Intent) param.args[0];
+                        if (intent != null) {
+                            android.content.ComponentName cn = intent.getComponent();
+                            if (cn != null && cn.getClassName().contains("UnsafeDevice")) {
+                                XposedBridge.log("[DanaBypass] Context.startActivity UnsafeDevice BLOCKED!");
+                                param.setResult(null);
+                            }
+                        }
+                    }
+                });
+        } catch (Throwable e) {}
+
+        // 3. Backup: Hook onCreate dan langsung finish TANPA call original
         try {
             XposedHelpers.findAndHookMethod(
                 "id.dana.onboarding.unsafe.UnsafeDeviceActivity",
-                lpparam.classLoader,
-                "onCreate",
+                lpparam.classLoader, "onCreate",
                 android.os.Bundle.class,
-                new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        XposedBridge.log("[DanaBypass] UnsafeDeviceActivity.onCreate -> FINISH!");
-                        // Panggil super.onCreate dulu biar tidak crash
+                new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] UnsafeDeviceActivity.onCreate REPLACED!");
                         try {
-                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
+                            // Hanya call Activity.onCreate (super paling atas)
+                            XposedHelpers.callMethod(param.thisObject, "finish");
                         } catch (Throwable e) {}
-                        // Langsung finish
-                        try {
-                            android.app.Activity activity = (android.app.Activity) param.thisObject;
-                            activity.finishAffinity();
-                        } catch (Throwable e) {
-                            XposedBridge.log("[DanaBypass] finish error: " + e.getMessage());
-                        }
-                        param.setResult(null);
+                        return null;
                     }
                 });
-            XposedBridge.log("[DanaBypass] UnsafeDeviceActivity BLOCKED! ✅");
+            XposedBridge.log("[DanaBypass] UnsafeDeviceActivity.onCreate BLOCKED! ✅");
         } catch (Throwable e) {
             XposedBridge.log("[DanaBypass] UnsafeDevice: " + e.getMessage());
         }
