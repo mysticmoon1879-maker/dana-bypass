@@ -125,7 +125,38 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedBridge.log("[DanaBypass] RC.init hooked!");
         } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.init err: " + e.getMessage()); }
 
-        // === LAYER 5: ScanAttack ===
+        // RC.onResume() - JUGA punya anti-tamper yang crash!
+        // Dipanggil otomatis oleh Android setelah onCreate
+        // Kalau tidak di-hook → crash dari onResume anti-tamper
+        try {
+            XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity",
+                lpparam.classLoader, "onResume",
+                new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] RC.onResume → skip!");
+                        // Panggil super.onResume agar Android lifecycle tetap benar
+                        try {
+                            XposedHelpers.callMethod(param.thisObject, "onResume");
+                        } catch (Throwable e) {}
+                        return null;
+                    }
+                });
+            XposedBridge.log("[DanaBypass] RC.onResume hooked!");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.onResume err: " + e.getMessage()); }
+
+        // RC.onPause() - juga punya anti-tamper (319 instructions)
+        try {
+            XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity",
+                lpparam.classLoader, "onPause",
+                new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] RC.onPause → skip!");
+                        try { XposedHelpers.callSuperMethod(param.thisObject, "onPause"); } catch (Throwable e) {}
+                        return null;
+                    }
+                });
+            XposedBridge.log("[DanaBypass] RC.onPause hooked!");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.onPause err: " + e.getMessage()); }
         try { hookScanAttackDirect(lpparam.classLoader.loadClass("com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack")); } catch (Throwable e) {}
 
         // === LAYER 6: SecuritySignalsInfo ===
