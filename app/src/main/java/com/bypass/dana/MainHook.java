@@ -145,7 +145,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 new XC_MethodReplacement() {
                     @Override protected Object replaceHookedMethod(MethodHookParam param) {
                         XposedBridge.log("[DanaBypass] RC.onPause → skip!");
-                        try { XposedHelpers.callSuperMethod(param.thisObject, "onPause"); } catch (Throwable e) {}
                         return null;
                     }
                 });
