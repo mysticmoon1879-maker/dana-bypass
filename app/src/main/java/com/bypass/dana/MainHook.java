@@ -20,74 +20,56 @@ public class MainHook implements IXposedHookLoadPackage {
     @Override
     public void handleLoadPackage(XC_LoadPackage.LoadPackageParam lpparam) {
         if (!lpparam.packageName.equals("id.dana")) return;
-        XposedBridge.log("[DanaBypass] START v7");
+        XposedBridge.log("[DanaBypass] START v8");
 
-        // =============================================
-        // CLASSES2.DEX - BASE APK (hookable langsung!)
-        // =============================================
-
-        // 1. Hook uvc.d() - method yang trigger bgls.b() dengan detection results
-        // uvc adalah di classes2.dex - PASTI hookable!
+        // =========================================
+        // KUNCI UTAMA: Block UnsafeDeviceActivity!
+        // Ini screen "root detected" yang muncul
+        // Ada di classes3.dex - hookable langsung!
+        // =========================================
         try {
-            XposedHelpers.findAndHookMethod("defpackage.uvc", lpparam.classLoader, "d",
-                android.content.Context.class,
-                new XC_MethodReplacement() {
-                    @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                        XposedBridge.log("[DanaBypass] uvc.d(DanaDfpConfig) BLOCKED! No detection.");
-                        return null;
+            XposedHelpers.findAndHookMethod(
+                "id.dana.onboarding.unsafe.UnsafeDeviceActivity",
+                lpparam.classLoader,
+                "onCreate",
+                android.os.Bundle.class,
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] UnsafeDeviceActivity.onCreate -> FINISH!");
+                        // Panggil super.onCreate dulu biar tidak crash
+                        try {
+                            XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
+                        } catch (Throwable e) {}
+                        // Langsung finish
+                        try {
+                            android.app.Activity activity = (android.app.Activity) param.thisObject;
+                            activity.finishAffinity();
+                        } catch (Throwable e) {
+                            XposedBridge.log("[DanaBypass] finish error: " + e.getMessage());
+                        }
+                        param.setResult(null);
                     }
                 });
-            XposedBridge.log("[DanaBypass] uvc.d BLOCKED! ✅");
+            XposedBridge.log("[DanaBypass] UnsafeDeviceActivity BLOCKED! ✅");
         } catch (Throwable e) {
-            XposedBridge.log("[DanaBypass] uvc.d: " + e.getMessage());
-            // Fallback: hook semua method uvc yang tidak penting
-            try {
-                Class<?> uvc = XposedHelpers.findClass("defpackage.uvc", lpparam.classLoader);
-                for (Method m : uvc.getDeclaredMethods()) {
-                    if (m.getName().equals("d") || m.getName().equals("b")) {
-                        XposedBridge.log("[DanaBypass] uvc method: " + m.getName() + " " + java.util.Arrays.toString(m.getParameterTypes()));
-                    }
-                }
-            } catch (Throwable e2) {}
+            XposedBridge.log("[DanaBypass] UnsafeDevice: " + e.getMessage());
         }
 
-        // 2. bgls.b SYNTHETIC - di classes3.dex (base APK)
-        // Signature: (Lbgls;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;Ljava/lang/Boolean;ILjava/lang/Object;)V
-        try {
-            Class<?> bgls = XposedHelpers.findClass("defpackage.bgls", lpparam.classLoader);
-            for (Method m : bgls.getDeclaredMethods()) {
-                if (m.getName().equals("b")) {
-                    Class<?>[] params = m.getParameterTypes();
-                    // Cari synthetic method dengan 8 params: bgls, Boolean*5, int, Object
-                    if (params.length == 8 && params[0].getName().equals("defpackage.bgls")
-                            && params[1] == Boolean.class) {
-                        XposedBridge.hookMethod(m, new XC_MethodHook() {
-                            @Override protected void beforeHookedMethod(MethodHookParam param) {
-                                // Set semua Boolean params ke null/false
-                                for (int i = 1; i <= 5; i++) {
-                                    param.args[i] = Boolean.FALSE;
-                                }
-                                XposedBridge.log("[DanaBypass] bgls.b synthetic -> all false!");
-                            }
-                        });
-                        XposedBridge.log("[DanaBypass] bgls.b synthetic HOOKED! ✅");
-                    }
-                }
-            }
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] bgls: " + e.getMessage()); }
-
-        // 3. ScanAttack - di classes3.dex (base APK)
+        // ScanAttack - di classes3.dex
         try {
             Class<?> sa = XposedHelpers.findClass(
                 "com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack", lpparam.classLoader);
             hookScanAttackDirect(sa);
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] ScanAttack: " + e.getMessage()); }
+        } catch (Throwable e) {}
 
-        // =============================================
-        // CLASSES7.DEX - SPLIT APK (via ClassLoader watcher)
-        // =============================================
+        // SecuritySignalsInfo getter hooks
+        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getRootDetected", lpparam);
+        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getHookDetected", lpparam);
+        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getEmulatorDetected", lpparam);
+        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getTamperDetected", lpparam);
 
-        // 4. SecuritySignalsInfo CONSTRUCTOR - intercept sebelum object dibuat
+        // SecuritySignalsInfo constructor
         try {
             XposedHelpers.findAndHookConstructor(
                 "id.dana.telemetrysdk.model.SecuritySignalsInfo",
@@ -95,30 +77,23 @@ public class MainHook implements IXposedHookLoadPackage {
                 boolean.class, boolean.class, boolean.class, boolean.class,
                 new XC_MethodHook() {
                     @Override protected void beforeHookedMethod(MethodHookParam param) {
-                        param.args[0] = false; // rootDetected
-                        param.args[1] = false; // hookDetected
-                        param.args[2] = false; // emulatorDetected
-                        param.args[3] = false; // tamperDetected
-                        XposedBridge.log("[DanaBypass] SSI constructor -> all false! ✅");
+                        param.args[0] = false;
+                        param.args[1] = false;
+                        param.args[2] = false;
+                        param.args[3] = false;
+                        XposedBridge.log("[DanaBypass] SSI constructor -> all false!");
                     }
                 });
-            XposedBridge.log("[DanaBypass] SSI constructor hooked!");
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] SSI constructor: " + e.getMessage()); }
+        } catch (Throwable e) {}
 
-        // 5. SecuritySignalsInfo getters (backup)
-        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getRootDetected", lpparam);
-        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getHookDetected", lpparam);
-        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getEmulatorDetected", lpparam);
-        hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getTamperDetected", lpparam);
-
-        // 6. Standard root detection classes (classes7 via ClassLoader watcher)
+        // Device isRooted
         hookFalse("id.dana.lib.gcontainer.app.bridge.deviceinfo.DeviceInfo$Device", "isRooted", lpparam);
         hookFalse("id.dana.utils.config.model.Device", "isRooted", lpparam);
         hookFalse("id.dana.domain.featureconfig.model.StartupConfig", "getFeatureDexguardTamperCheck", lpparam);
         hookFalse("com.alibaba.ariver.commonability.core.util.AOMPDeviceUtils", "isRooted", lpparam);
         hookFalse("com.google.firebase.crashlytics.internal.common.CommonUtils", "isRooted", lpparam);
 
-        // 7. SSL Pinning bypass
+        // SSL Pinning
         hookVoid("com.alipay.imobile.network.sslpinning.SSLPinningManager", "validateCertificates", lpparam);
         try { XposedHelpers.findAndHookMethod("android.security.net.config.NetworkSecurityTrustManager", lpparam.classLoader, "checkPins", java.util.List.class, new XC_MethodReplacement() { @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; } }); } catch (Throwable e) {}
         try { XposedHelpers.findAndHookMethod("android.security.net.config.RootTrustManager", lpparam.classLoader, "checkServerTrusted", java.security.cert.X509Certificate[].class, String.class, java.net.Socket.class, new XC_MethodReplacement() { @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; } }); } catch (Throwable e) {}
@@ -134,7 +109,7 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable e) {}
 
-        // 8. RC OOM suppress
+        // RC OOM suppress
         try {
             XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity", lpparam.classLoader, "init", new XC_MethodHook() {
                 @Override protected void beforeHookedMethod(MethodHookParam p) { XposedBridge.log("[DanaBypass] RC.init..."); }
@@ -142,7 +117,7 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (param.hasThrowable()) {
                         Throwable t = param.getThrowable();
                         if (t instanceof OutOfMemoryError || t instanceof ArrayIndexOutOfBoundsException || t instanceof NullPointerException) {
-                            XposedBridge.log("[DanaBypass] RC " + t.getClass().getSimpleName() + " SUPPRESSED!");
+                            XposedBridge.log("[DanaBypass] RC SUPPRESSED!");
                             param.setResult(null);
                         }
                     } else { XposedBridge.log("[DanaBypass] RC.init OK"); }
@@ -150,7 +125,7 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable e) {}
 
-        // 9. JSON intercept (backup)
+        // JSON intercept
         XC_MethodHook jsonHook = new XC_MethodHook() {
             @Override protected void beforeHookedMethod(MethodHookParam param) {
                 if (!(param.args[0] instanceof String)) return;
@@ -163,7 +138,10 @@ public class MainHook implements IXposedHookLoadPackage {
         try { XposedHelpers.findAndHookMethod("org.json.JSONObject", lpparam.classLoader, "put", String.class, boolean.class, jsonHook); } catch (Throwable e) {}
         try { XposedHelpers.findAndHookMethod("org.json.JSONObject", lpparam.classLoader, "put", String.class, Object.class, jsonHook); } catch (Throwable e) {}
 
-        // 10. ClassLoader watcher untuk split APK classes7
+        // Block exit
+        try { XposedHelpers.findAndHookMethod("java.lang.System", lpparam.classLoader, "exit", int.class, new XC_MethodHook() { @Override protected void beforeHookedMethod(MethodHookParam p) { XposedBridge.log("[DanaBypass] exit blocked"); p.setResult(null); } }); } catch (Throwable e) {}
+
+        // ClassLoader watcher untuk lazy classes
         XC_MethodHook watcherHook = new XC_MethodHook() {
             @Override protected void afterHookedMethod(MethodHookParam param) {
                 try {
@@ -175,6 +153,8 @@ public class MainHook implements IXposedHookLoadPackage {
                         case "defpackage.bglq": hookBglqDirect(cls); hooked.add(name); break;
                         case "defpackage.bglz": hookBglzDirect(cls); hooked.add(name); break;
                         case "defpackage.bglb": hookBglbDirect(cls); hooked.add(name); break;
+                        case "defpackage.bgls": hookBglsDirect(cls); hooked.add(name); break;
+                        case "defpackage.uvc": hookUvcDirect(cls); hooked.add(name); break;
                     }
                 } catch (Throwable e) {}
             }
@@ -183,10 +163,24 @@ public class MainHook implements IXposedHookLoadPackage {
         try { XposedHelpers.findAndHookMethod(ClassLoader.class, "loadClass", String.class, boolean.class, watcherHook); } catch (Throwable e) {}
         try { XposedHelpers.findAndHookMethod("dalvik.system.BaseDexClassLoader", lpparam.classLoader, "findClass", String.class, watcherHook); } catch (Throwable e) {}
 
-        // 11. Block exit
-        try { XposedHelpers.findAndHookMethod("java.lang.System", lpparam.classLoader, "exit", int.class, new XC_MethodHook() { @Override protected void beforeHookedMethod(MethodHookParam p) { XposedBridge.log("[DanaBypass] exit blocked"); p.setResult(null); } }); } catch (Throwable e) {}
+        XposedBridge.log("[DanaBypass] ALL DONE! v8 ✅");
+    }
 
-        XposedBridge.log("[DanaBypass] ALL DONE! ✅");
+    private static void hookUvcDirect(Class<?> cls) {
+        for (Method m : cls.getDeclaredMethods()) {
+            // Block method yang call bgls.b dengan detection results
+            if (m.getName().equals("d") && m.getParameterTypes().length == 1) {
+                try {
+                    XposedBridge.hookMethod(m, new XC_MethodReplacement() {
+                        @Override protected Object replaceHookedMethod(MethodHookParam p) {
+                            XposedBridge.log("[DanaBypass] uvc.d BLOCKED!");
+                            return null;
+                        }
+                    });
+                    XposedBridge.log("[DanaBypass] uvc.d hooked!");
+                } catch (Throwable e) {}
+            }
+        }
     }
 
     private static void hookBglqDirect(Class<?> cls) {
@@ -194,7 +188,7 @@ public class MainHook implements IXposedHookLoadPackage {
         for (Method m : cls.getDeclaredMethods())
             if (m.getReturnType() == boolean.class && m.getParameterTypes().length == 0)
                 try { XposedBridge.hookMethod(m, XC_MethodReplacement.returnConstant(false)); n++; } catch (Throwable e) {}
-        XposedBridge.log("[DanaBypass] bglq hooked: " + n);
+        XposedBridge.log("[DanaBypass] bglq: " + n);
     }
 
     private static void hookBglzDirect(Class<?> cls) {
@@ -208,6 +202,22 @@ public class MainHook implements IXposedHookLoadPackage {
         XposedBridge.log("[DanaBypass] bglz s=" + s + " g=" + g);
     }
 
+    private static void hookBglsDirect(Class<?> cls) {
+        for (Method m : cls.getDeclaredMethods()) {
+            if (m.getName().equals("b") && m.getParameterTypes().length == 8) {
+                try {
+                    XposedBridge.hookMethod(m, new XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam p) {
+                            for (int i = 1; i <= 5; i++) if (p.args[i] instanceof Boolean) p.args[i] = Boolean.FALSE;
+                            XposedBridge.log("[DanaBypass] bgls.b -> false!");
+                        }
+                    });
+                    XposedBridge.log("[DanaBypass] bgls.b HOOKED!");
+                } catch (Throwable e) {} break;
+            }
+        }
+    }
+
     private static void hookBglbDirect(Class<?> cls) {
         for (Method m : cls.getDeclaredMethods()) {
             if (m.getName().equals("b") && m.getParameterTypes().length == 1) {
@@ -218,8 +228,9 @@ public class MainHook implements IXposedHookLoadPackage {
                                 Object r = param.getResult();
                                 if (r instanceof org.json.JSONObject) {
                                     org.json.JSONObject j = (org.json.JSONObject) r;
-                                    for (String k : ROOT_KEYS) try { j.put(k, false); } catch (Throwable e) {}
-                                    XposedBridge.log("[DanaBypass] bglb.b -> all false! ✅");
+                                    String[] keys = {"rootDetected","hookDetected","tamperDetected","emulatorDetected","isRooted"};
+                                    for (String k : keys) try { j.put(k, false); } catch (Throwable e) {}
+                                    XposedBridge.log("[DanaBypass] bglb.b -> all false!");
                                 }
                             } catch (Throwable e) {}
                         }
@@ -250,7 +261,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             } catch (Throwable e) {}
         }
-        XposedBridge.log("[DanaBypass] ScanAttack HOOKED: " + n);
+        XposedBridge.log("[DanaBypass] ScanAttack: " + n);
     }
 
     private void hookFalse(String cls, String method, XC_LoadPackage.LoadPackageParam l) {
