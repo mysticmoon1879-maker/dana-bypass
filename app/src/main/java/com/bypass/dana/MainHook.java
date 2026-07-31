@@ -53,8 +53,6 @@ public class MainHook implements IXposedHookLoadPackage {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
-
-        // UrlTransport - call original, ignore SSL errors only
         try {
             Class<?> reqClass = XposedHelpers.findClass(
                 "com.alipay.imobile.network.quake.Request", lpparam.classLoader);
@@ -69,55 +67,45 @@ public class MainHook implements IXposedHookLoadPackage {
                             XposedBridge.invokeOriginalMethod(param.method, param.thisObject, param.args);
                         } catch (Throwable e) {
                             String msg = e.getMessage() != null ? e.getMessage() : "";
-                            if (msg.contains("pinning") || msg.contains("certificate") || msg.contains("SSL")) {
-                                XposedBridge.log("[DanaBypass] SSL ignored");
-                            } else {
+                            if (!msg.contains("pinning") && !msg.contains("certificate") && !msg.contains("SSL")) {
                                 throw e;
                             }
                         }
                         param.setResult(null);
                     }
                 });
-            XposedBridge.log("[DanaBypass] UrlTransport OK");
         } catch (Throwable e) {}
 
-        // RISK CHALLENGE - biarkan RC.init JALAN (agar Akamai challenge selesai)
-        // Hanya tangkap crash jika terjadi
+        // RISK CHALLENGE - jalankan init() tapi SUPPRESS OOM jika terjadi
         try {
             XposedHelpers.findAndHookMethod(
                 "id.dana.riskChallenges.ui.RiskChallengeActivity",
                 lpparam.classLoader, "init",
                 new XC_MethodHook() {
                     @Override
-                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                        // Biarkan jalan normal - jangan di-block!
-                        XposedBridge.log("[DanaBypass] RC.init running normally...");
-                    }
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                        XposedBridge.log("[DanaBypass] RC.init completed!");
-                    }
-                });
-            XposedBridge.log("[DanaBypass] RiskChallenge monitored (not blocked)");
-        } catch (Throwable e) {
-            XposedBridge.log("[DanaBypass] RC: " + e.getMessage());
-        }
-
-        // OOM block - hanya untuk alokasi tidak wajar
-        try {
-            XposedHelpers.findAndHookMethod("dalvik.system.VMRuntime",
-                lpparam.classLoader, "newNonMovableArray",
-                Class.class, int.class,
-                new XC_MethodHook() {
-                    @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        if ((int) param.args[1] > 100000000) {
-                            XposedBridge.log("[DanaBypass] OOM blocked!");
-                            param.args[1] = 1;
+                        XposedBridge.log("[DanaBypass] RC.init starting...");
+                    }
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (param.hasThrowable()) {
+                            Throwable t = param.getThrowable();
+                            if (t instanceof OutOfMemoryError ||
+                                t instanceof ArrayIndexOutOfBoundsException ||
+                                t instanceof NullPointerException) {
+                                // Suppress anti-tamper OOM/crash
+                                XposedBridge.log("[DanaBypass] RC.init OOM/crash SUPPRESSED: " + t.getClass().getSimpleName());
+                                param.setResult(null); // Suppress exception!
+                            }
+                        } else {
+                            XposedBridge.log("[DanaBypass] RC.init completed normally!");
                         }
                     }
                 });
-        } catch (Throwable e) {}
+            XposedBridge.log("[DanaBypass] RiskChallenge OOM suppressor active!");
+        } catch (Throwable e) {
+            XposedBridge.log("[DanaBypass] RC: " + e.getMessage());
+        }
 
         // JSON rootDetected intercept
         try {
