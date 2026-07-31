@@ -160,20 +160,29 @@ public class MainHook implements IXposedHookLoadPackage {
             });
         } catch (Throwable e) {}
 
-        // RC OOM suppress
+        // RC: hook initComponent() yang dipanggil SEBELUM init() yang OOM
+        // Urutan: onCreate → init(Bundle) → initComponent() → init() [OOM]
+        // Kita intercept di initComponent() → setResult(OK) + finish()
+        // OOM tidak akan terjadi karena init() tidak pernah dipanggil
         try {
-            XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity", lpparam.classLoader, "init", new XC_MethodHook() {
-                @Override protected void beforeHookedMethod(MethodHookParam p) { XposedBridge.log("[DanaBypass] RC.init..."); }
-                @Override protected void afterHookedMethod(MethodHookParam param) {
-                    if (param.hasThrowable()) {
-                        Throwable t = param.getThrowable();
-                        if (t instanceof OutOfMemoryError || t instanceof ArrayIndexOutOfBoundsException || t instanceof NullPointerException) {
-                            XposedBridge.log("[DanaBypass] RC SUPPRESSED!"); param.setResult(null);
+            XposedHelpers.findAndHookMethod(
+                "id.dana.riskChallenges.ui.RiskChallengeActivity",
+                lpparam.classLoader, "initComponent",
+                new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] RC.initComponent → setResult(OK) + finish!");
+                        try {
+                            android.app.Activity rc = (android.app.Activity) param.thisObject;
+                            rc.setResult(-1); // RESULT_OK
+                            rc.finish();
+                        } catch (Throwable e) {
+                            XposedBridge.log("[DanaBypass] RC finish err: " + e.getMessage());
                         }
-                    } else { XposedBridge.log("[DanaBypass] RC.init OK"); }
-                }
-            });
-        } catch (Throwable e) {}
+                        return null;
+                    }
+                });
+            XposedBridge.log("[DanaBypass] RC.initComponent hooked ✅");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC hook: " + e.getMessage()); }
 
         // JSON intercept
         XC_MethodHook jsonHook = new XC_MethodHook() {
