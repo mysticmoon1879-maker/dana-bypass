@@ -14,7 +14,7 @@ public class MainHook implements IXposedHookLoadPackage {
         if (!lpparam.packageName.equals("id.dana")) return;
         XposedBridge.log("[DanaBypass] START");
 
-        // ===== ROOT DETECTION =====
+        // ROOT DETECTION
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getRootDetected", lpparam);
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getHookDetected", lpparam);
         hookFalse("id.dana.telemetrysdk.model.SecuritySignalsInfo", "getEmulatorDetected", lpparam);
@@ -25,49 +25,39 @@ public class MainHook implements IXposedHookLoadPackage {
         hookFalse("com.alibaba.ariver.commonability.core.util.AOMPDeviceUtils", "isRooted", lpparam);
         hookFalse("com.google.firebase.crashlytics.internal.common.CommonUtils", "isRooted", lpparam);
 
-        // ===== SSL PINNING BYPASS =====
-        // Alipay SSL Pinning Manager
+        // SSL PINNING - hanya bypass check, jangan block connection setup!
         hookVoid("com.alipay.imobile.network.sslpinning.SSLPinningManager", "validateCertificates", lpparam);
 
-        // NetworkSecurityTrustManager
         try {
             XposedHelpers.findAndHookMethod(
                 "android.security.net.config.NetworkSecurityTrustManager",
-                lpparam.classLoader, "checkPins",
-                java.util.List.class,
+                lpparam.classLoader, "checkPins", java.util.List.class,
                 new XC_MethodReplacement() {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
 
-        // RootTrustManager
         try {
             XposedHelpers.findAndHookMethod(
                 "android.security.net.config.RootTrustManager",
                 lpparam.classLoader, "checkServerTrusted",
-                java.security.cert.X509Certificate[].class,
-                String.class,
-                java.net.Socket.class,
+                java.security.cert.X509Certificate[].class, String.class, java.net.Socket.class,
                 new XC_MethodReplacement() {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
 
-        // OkHttp CertificatePinner
         try {
             XposedHelpers.findAndHookMethod(
                 "com.android.okhttp.CertificatePinner",
                 lpparam.classLoader, "check",
                 String.class, java.util.List.class,
                 new XC_MethodReplacement() {
-                    @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                        XposedBridge.log("[DanaBypass] CertPinner bypassed");
-                        return null;
-                    }
+                    @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
         } catch (Throwable e) {}
 
-        // UrlTransport cert check
+        // FIX: UrlTransport - panggil original tapi ignore SSL exception
         try {
             Class<?> reqClass = XposedHelpers.findClass(
                 "com.alipay.imobile.network.quake.Request", lpparam.classLoader);
@@ -75,15 +65,32 @@ public class MainHook implements IXposedHookLoadPackage {
                 "com.alipay.imobile.network.quake.transport.http.UrlTransport",
                 lpparam.classLoader, "a",
                 java.net.HttpURLConnection.class, reqClass,
-                new XC_MethodReplacement() {
-                    @Override protected Object replaceHookedMethod(MethodHookParam p) {
-                        XposedBridge.log("[DanaBypass] UrlTransport cert bypassed");
-                        return null;
+                new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        try {
+                            // Panggil original
+                            XposedBridge.invokeOriginalMethod(
+                                param.method, param.thisObject, param.args);
+                        } catch (Throwable e) {
+                            // Ignore SSL/cert errors saja
+                            String msg = e.getMessage();
+                            if (msg != null && (msg.contains("pinning") ||
+                                msg.contains("certificate") || msg.contains("SSL"))) {
+                                XposedBridge.log("[DanaBypass] SSL cert ignored");
+                            } else {
+                                throw e;
+                            }
+                        }
+                        param.setResult(null);
                     }
                 });
-        } catch (Throwable e) {}
+            XposedBridge.log("[DanaBypass] UrlTransport fixed!");
+        } catch (Throwable e) {
+            XposedBridge.log("[DanaBypass] UrlTransport: " + e.getMessage());
+        }
 
-        // ===== RISK CHALLENGE BYPASS =====
+        // RISK CHALLENGE
         try {
             XposedHelpers.findAndHookMethod(
                 "id.dana.riskChallenges.ui.RiskChallengeActivity",
@@ -99,7 +106,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedBridge.log("[DanaBypass] RC: " + e.getMessage());
         }
 
-        // ===== JSON rootDetected INTERCEPT =====
+        // JSON rootDetected
         try {
             XposedHelpers.findAndHookMethod(
                 "org.json.JSONObject", lpparam.classLoader,
@@ -117,7 +124,7 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedBridge.log("[DanaBypass] JSONObject hooked");
         } catch (Throwable e) {}
 
-        // ===== OOM BLOCK =====
+        // OOM block
         try {
             XposedHelpers.findAndHookMethod("dalvik.system.VMRuntime",
                 lpparam.classLoader, "newNonMovableArray",
@@ -125,15 +132,12 @@ public class MainHook implements IXposedHookLoadPackage {
                 new XC_MethodHook() {
                     @Override
                     protected void beforeHookedMethod(MethodHookParam param) {
-                        int size = (int) param.args[1];
-                        if (size > 100000000) {
-                            param.args[1] = 1;
-                        }
+                        if ((int) param.args[1] > 100000000) param.args[1] = 1;
                     }
                 });
         } catch (Throwable e) {}
 
-        // ===== BLOCK FORCE CLOSE =====
+        // Block exit
         try {
             XposedHelpers.findAndHookMethod("java.lang.System",
                 lpparam.classLoader, "exit", int.class,
@@ -163,7 +167,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 new XC_MethodReplacement() {
                     @Override protected Object replaceHookedMethod(MethodHookParam p) { return null; }
                 });
-            XposedBridge.log("[DanaBypass] " + method + " OK");
         } catch (Throwable e) {}
     }
 }
