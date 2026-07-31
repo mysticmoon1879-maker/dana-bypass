@@ -91,7 +91,9 @@ public class MainHook implements IXposedHookLoadPackage {
         // 7. ErrorStateCardView inner $$a - classes7.dex
         // → ditangani ClassLoader watcher di bawah
 
-        // === LAYER 4: RC initComponent - sebelum OOM ===
+        // === LAYER 4: RC - hook KEDUA method ===
+        // finish() tidak stop execution! Urutan: initComponent() → init() → configToolbar()
+        // Kita hook keduanya: initComponent setResult+finish, init() skip OOM
         try {
             XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity",
                 lpparam.classLoader, "initComponent",
@@ -107,7 +109,21 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
             XposedBridge.log("[DanaBypass] RC.initComponent hooked!");
-        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC err: " + e.getMessage()); }
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.initComponent err: " + e.getMessage()); }
+
+        // RC.init() - dipanggil SETELAH initComponent(), finish() belum stop execution
+        // Tanpa hook ini → OOM di init() → crash
+        try {
+            XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity",
+                lpparam.classLoader, "init",
+                new XC_MethodReplacement() {
+                    @Override protected Object replaceHookedMethod(MethodHookParam param) {
+                        XposedBridge.log("[DanaBypass] RC.init → skip!");
+                        return null;
+                    }
+                });
+            XposedBridge.log("[DanaBypass] RC.init hooked!");
+        } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.init err: " + e.getMessage()); }
 
         // === LAYER 5: ScanAttack ===
         try { hookScanAttackDirect(lpparam.classLoader.loadClass("com.alipay.alipaysecuritysdk.apdid.attack.x.ScanAttack")); } catch (Throwable e) {}
