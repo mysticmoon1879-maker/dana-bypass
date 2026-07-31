@@ -125,20 +125,14 @@ public class MainHook implements IXposedHookLoadPackage {
             XposedBridge.log("[DanaBypass] RC.init hooked!");
         } catch (Throwable e) { XposedBridge.log("[DanaBypass] RC.init err: " + e.getMessage()); }
 
-        // RC.onResume() - JUGA punya anti-tamper yang crash!
-        // Dipanggil otomatis oleh Android setelah onCreate
-        // Kalau tidak di-hook → crash dari onResume anti-tamper
+        // RC.onResume() - punya anti-tamper (throws Throwable)
         try {
             XposedHelpers.findAndHookMethod("id.dana.riskChallenges.ui.RiskChallengeActivity",
                 lpparam.classLoader, "onResume",
                 new XC_MethodReplacement() {
                     @Override protected Object replaceHookedMethod(MethodHookParam param) {
                         XposedBridge.log("[DanaBypass] RC.onResume → skip!");
-                        // Panggil super.onResume agar Android lifecycle tetap benar
-                        try {
-                            XposedHelpers.callMethod(param.thisObject, "onResume");
-                        } catch (Throwable e) {}
-                        return null;
+                        return null; // RC sudah finishing, tidak perlu lifecycle lanjut
                     }
                 });
             XposedBridge.log("[DanaBypass] RC.onResume hooked!");
